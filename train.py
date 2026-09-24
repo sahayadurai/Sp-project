@@ -1,4 +1,4 @@
-"""Train the answer head: python train.py --max-images 500"""
+"""Train the cross-attention VQA model: python train.py --max-images 1000"""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def main() -> None:
     parser.add_argument("--max-images", type=int, default=1000)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--output", default="artifacts/flickr_vqa.pt")
+    parser.add_argument("--output", default="artifacts/flickr_vqa_1000.pt")
     args = parser.parse_args()
 
     dataset = load_flickr30k(args.split, streaming=True)
@@ -41,24 +41,31 @@ def main() -> None:
 
     model = FlickrVQA(labels)
     model.eval()
-    embeddings, targets = [], []
+    image_embeddings, text_embeddings, targets = [], [], []
     record_images = {record["image_id"]: image_from_record(record) for record in records}
     for start in tqdm(range(0, len(examples), args.batch_size), desc="Encoding Flickr30k"):
         batch = examples[start : start + args.batch_size]
         with torch.inference_mode():
-            embeddings.append(model.encode([record_images[item.image_id] for item in batch], [item.question for item in batch]).cpu())
+            image_batch, text_batch = model.encode_modalities(
+                [record_images[item.image_id] for item in batch],
+                [item.question for item in batch],
+            )
+            image_embeddings.append(image_batch.cpu())
+            text_embeddings.append(text_batch.cpu())
         targets.extend(label_to_id[item.answer] for item in batch)
-    x = torch.cat(embeddings)
+    image_x = torch.cat(image_embeddings)
+    text_x = torch.cat(text_embeddings)
     y = torch.tensor(targets)
-    loader = DataLoader(TensorDataset(x, y), batch_size=args.batch_size, shuffle=True)
-    optimizer = torch.optim.AdamW(model.head.parameters(), lr=2e-3, weight_decay=1e-4)
+    loader = DataLoader(TensorDataset(image_x, text_x, y), batch_size=args.batch_size, shuffle=True)
+    trainable = list(model.image_projection.parameters()) + list(model.text_projection.parameters()) + list(model.cross_attention.parameters()) + list(model.fusion_norm.parameters()) + list(model.head.parameters())
+    optimizer = torch.optim.AdamW(trainable, lr=2e-3, weight_decay=1e-4)
     criterion = nn.CrossEntropyLoss()
-    model.head.train()
+    model.train()
     for epoch in range(args.epochs):
         total_loss = 0.0
-        for batch_x, batch_y in loader:
+        for batch_image, batch_text, batch_y in loader:
             optimizer.zero_grad()
-            loss = criterion(model.head(batch_x), batch_y)
+            loss = criterion(model.forward_features(batch_image, batch_text), batch_y)
             loss.backward()
             optimizer.step()
             total_loss += loss.item() * len(batch_y)
@@ -66,7 +73,16 @@ def main() -> None:
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"answer_labels": labels, "head": model.head.state_dict(), "clip_name": "openai/clip-vit-base-patch32", "text_name": "distilbert-base-uncased"}, output)
+    torch.save({
+        "answer_labels": labels,
+        "image_projection": model.image_projection.state_dict(),
+        "text_projection": model.text_projection.state_dict(),
+        "cross_attention": model.cross_attention.state_dict(),
+        "fusion_norm": model.fusion_norm.state_dict(),
+        "head": model.head.state_dict(),
+        "clip_name": "openai/clip-vit-base-patch32",
+        "text_name": "distilbert-base-uncased",
+    }, output)
     print(f"saved {output} with {len(labels)} answers and {len(examples)} QA examples")
 
 

@@ -7,7 +7,7 @@ from PIL import Image
 
 from src.model import FlickrVQA
 
-st.set_page_config(page_title="Flickr30k VQA Lab", page_icon="◈", layout="wide")
+st.set_page_config(page_title="VQA System", page_icon="◈", layout="wide")
 st.markdown("""
 <style>
 :root { --ink:#182326; --mint:#d8f3dc; --coral:#f4845f; --paper:#fffaf2; }
@@ -18,16 +18,18 @@ st.markdown("""
 .hero p { font-size: 1.05rem; max-width: 760px; }
 .answer { padding: 1rem 1.2rem; border-left: 6px solid var(--coral); background: #ffffffbb; border-radius: 8px; margin: .5rem 0; }
 .answer strong { font-size: 1.3rem; }
+.stFileUploader button { background: #fffaf2 !important; color: #182326 !important; border: 1px solid #182326 !important; font-weight: 700 !important; }
+.stFileUploader button:hover { background: #f9d5c1 !important; color: #182326 !important; border-color: #182326 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="hero"><h1>Flickr30k VQA Lab</h1><p>A compact, inspectable vision question answering system. Images are encoded with CLIP, questions with DistilBERT, and answers come from a trained classifier rather than a generative multimodal LLM.</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="hero"><h1>VQA System</h1><p>A compact, inspectable vision question answering system. Frozen CLIP and DistilBERT encoders meet in a learned cross-attention fusion block, without an all-in-one multimodal LLM.</p></div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("Model status")
-    checkpoint = st.text_input("Checkpoint", "artifacts/flickr_vqa.pt")
+    checkpoint = st.text_input("Checkpoint", "artifacts/flickr_vqa_1000.pt")
     device = st.selectbox("Runtime", ["cpu", "cuda"], index=0)
-    st.caption("Train first with: python train.py --max-images 1000")
+    st.caption("Train with: python train.py --max-images 1000")
 
 @st.cache_resource(show_spinner="Loading vision and language encoders...")
 def load_model(path: str, runtime: str):
@@ -44,7 +46,7 @@ with left:
         st.info("Upload an image to begin.")
 with right:
     st.subheader("2 · Ask a question")
-    question = st.text_input("Question", placeholder="What color is visible?")
+    question = st.text_input("Question", placeholder="What color is the dog?")
     ask = st.button("Get answer", type="primary", use_container_width=True)
     if ask:
         if image is None or not question.strip():
@@ -61,5 +63,20 @@ with right:
             except Exception as error:
                 st.exception(error)
 
+with st.expander("System details and fusion method"):
+    details = load_model(checkpoint, device).fusion_summary() if Path(checkpoint).exists() else {
+        "image_encoder": "Frozen CLIP ViT-B/32",
+        "question_encoder": "Frozen DistilBERT",
+        "fusion": "Image query attends to question key/value",
+        "trainable": "Projection layers, cross-attention, and answer head",
+    }
+    detail_columns = st.columns(len(details))
+    for column, (label, value) in zip(detail_columns, details.items()):
+        column.metric(label.replace("_", " ").title(), value)
+
+with st.expander("Suggested evaluation questions"):
+    st.write("Try object, color, presence, and count questions on images outside Flickr30k.")
+    st.code("What color is the dog?\nWhat color is the ball?\nIs there a person?\nWhat is the main object?")
+
 st.divider()
-st.caption("Research note · Flickr30k supplies images and captions. This project derives transparent lexical QA examples from those captions, so its limitations and answer vocabulary are visible rather than hidden behind an all-in-one model.")
+st.caption("Research note · color questions use an object-specific visual specialist; other questions use the cross-attention classifier. Flickr30k supplies images and captions rather than native VQA pairs.")

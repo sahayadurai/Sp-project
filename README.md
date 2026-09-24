@@ -1,4 +1,4 @@
-# Flickr30k VQA Lab
+# VQA System
 
 A reproducible visual question answering baseline trained from the `nlphuji/flickr30k` Hugging Face dataset. It does not use an all-in-one multimodal LLM. The model combines a frozen OpenAI CLIP image encoder with a frozen DistilBERT question encoder and trains only a small answer-classification head.
 
@@ -16,12 +16,13 @@ python train.py --max-images 1000 --epochs 5
 streamlit run app.py
 ```
 
-The first run downloads the Flickr30k dataset and the CLIP/DistilBERT checkpoints from Hugging Face. For a laptop demo, start with `--max-images 100` and increase it for better coverage. Use `--device cuda` only on a CUDA-enabled machine; macOS uses CPU or can be adapted to MPS in `src/model.py`.
+The first run downloads the Flickr30k dataset and the CLIP/DistilBERT checkpoints from Hugging Face. Training uses 1,000 images by default and learns a compact cross-attention fusion block: the image representation is the query and the question representation supplies key/value context. For a laptop smoke test, use `--max-images 100`; use a free GPU runtime for faster training. Questions containing `color` or `colour` use an object-specific visual specialist with foreground cropping.
 
 ## Project layout
 
-- `train.py`: loads Flickr30k, derives QA examples, caches multimodal embeddings, and trains the answer head.
-- `src/model.py`: non-generative CLIP + DistilBERT architecture and checkpoint inference.
+- `train.py`: loads Flickr30k, derives QA examples, caches multimodal embeddings, and trains the fusion/head layers.
+- `src/model.py`: CLIP + DistilBERT encoders, cross-attention fusion, and checkpoint inference.
+- `src/model.py`: includes the object-specific color-region specialist.
 - `src/qa_generation.py`: deterministic caption-to-QA supervision.
 - `src/data.py`: dataset schema normalization.
 - `app.py`: Streamlit upload/question/ranked-answer dashboard.
