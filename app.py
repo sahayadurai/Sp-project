@@ -5,7 +5,7 @@ from pathlib import Path
 import streamlit as st
 from PIL import Image
 
-from src.model import FlickrVQA
+from src.model import FlickrVQA, resolve_device
 
 st.set_page_config(page_title="VQA System", page_icon="◈", layout="wide")
 st.markdown("""
@@ -28,12 +28,15 @@ st.markdown('<div class="hero"><h1>VQA System</h1><p>A compact, inspectable visi
 with st.sidebar:
     st.header("Model status")
     checkpoint = st.text_input("Checkpoint", "artifacts/flickr_vqa_1000.pt")
-    device = st.selectbox("Runtime", ["cpu", "cuda"], index=0)
+    device = st.selectbox("Runtime", ["cpu", "mps", "cuda"], index=0)
+    actual_device = resolve_device(device)
+    if actual_device != device:
+        st.caption(f"{device} unavailable; using {actual_device}.")
     st.caption("Train with: python train.py --max-images 1000")
 
 @st.cache_resource(show_spinner="Loading vision and language encoders...")
 def load_model(path: str, runtime: str):
-    return FlickrVQA.load_checkpoint(path, runtime if runtime == "cuda" else "cpu")
+    return FlickrVQA.load_checkpoint(path, resolve_device(runtime))
 
 left, right = st.columns([1.05, 0.95], gap="large")
 with left:
@@ -56,15 +59,21 @@ with right:
         else:
             try:
                 model = load_model(checkpoint, device)
-                predictions = model.predict(image, question.strip())
-                st.markdown("#### Ranked answers")
-                for rank, (answer, confidence) in enumerate(predictions, 1):
-                    st.markdown(f'<div class="answer"><strong>{rank}. {answer}</strong><br><small>model confidence {confidence:.1%}</small></div>', unsafe_allow_html=True)
+                result = model.answer_question(image, question.strip())
+                if result["kind"] == "sentence":
+                    confidence = result.get("confidence")
+                    confidence_text = f" · confidence {confidence:.1%}" if isinstance(confidence, float) else ""
+                    st.markdown("#### Answer")
+                    st.markdown(f'<div class="answer"><strong>{result["answer"]}</strong><br><small>{result["source"]}{confidence_text}</small></div>', unsafe_allow_html=True)
+                else:
+                    st.markdown("#### Ranked answers")
+                    for rank, (answer, confidence) in enumerate(result["answer"], 1):
+                        st.markdown(f'<div class="answer"><strong>{rank}. {answer}</strong><br><small>{result["source"]} · confidence {confidence:.1%}</small></div>', unsafe_allow_html=True)
             except Exception as error:
                 st.exception(error)
 
 with st.expander("System details and fusion method"):
-    details = load_model(checkpoint, device).fusion_summary() if Path(checkpoint).exists() else {
+    details = load_model(checkpoint, actual_device).fusion_summary() if Path(checkpoint).exists() else {
         "image_encoder": "Frozen CLIP ViT-B/32",
         "question_encoder": "Frozen DistilBERT",
         "fusion": "Image query attends to question key/value",
@@ -76,7 +85,7 @@ with st.expander("System details and fusion method"):
 
 with st.expander("Suggested evaluation questions"):
     st.write("Try object, color, presence, and count questions on images outside Flickr30k.")
-    st.code("What color is the dog?\nWhat color is the ball?\nIs there a person?\nWhat is the main object?")
+    st.code("What's in this picture?\nIs it a man?\nWhat color is the dog?\nWhat color is the ball?")
 
 st.divider()
-st.caption("Research note · color questions use an object-specific visual specialist; other questions use the cross-attention classifier. Flickr30k supplies images and captions rather than native VQA pairs.")
+st.caption("Research note · open questions use BLIP captioning, binary questions use CLIP verification, color questions use an object specialist, and other questions use the cross-attention classifier. Flickr30k supplies images and captions rather than native VQA pairs.")

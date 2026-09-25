@@ -8,13 +8,23 @@ import re
 import torch
 from PIL import Image
 from torch import nn
-from transformers import AutoModel, AutoTokenizer, CLIPModel, CLIPProcessor
+from transformers import AutoModel, AutoTokenizer, BlipForConditionalGeneration, BlipProcessor, CLIPModel, CLIPProcessor
 
 
 COLOR_NAMES = ("black", "white", "brown", "orange", "red", "yellow", "green", "blue", "gray", "pink", "purple")
 OBJECT_WORDS = {
     "dog", "cat", "person", "man", "woman", "child", "boy", "girl", "car", "ball", "shirt", "dress", "horse", "bird"
 }
+BLIP_NAME = "Salesforce/blip-image-captioning-base"
+
+
+def resolve_device(requested: str) -> str:
+    """Return a device supported by the current machine and PyTorch build."""
+    if requested == "cuda" and torch.cuda.is_available():
+        return "cuda"
+    if requested == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
 class FlickrVQA(nn.Module):
@@ -25,6 +35,8 @@ class FlickrVQA(nn.Module):
         self.processor = CLIPProcessor.from_pretrained(clip_name)
         self.tokenizer = AutoTokenizer.from_pretrained(text_name)
         self.text_encoder = AutoModel.from_pretrained(text_name)
+        self.captioner = None
+        self.caption_processor = None
         for parameter in self.clip.parameters():
             parameter.requires_grad = False
         for parameter in self.text_encoder.parameters():
@@ -78,6 +90,7 @@ class FlickrVQA(nn.Module):
 
     @classmethod
     def load_checkpoint(cls, path: str | Path, device: str = "cpu") -> "FlickrVQA":
+        device = resolve_device(device)
         bundle = torch.load(path, map_location=device)
         model = cls(bundle["answer_labels"], bundle.get("clip_name", "openai/clip-vit-base-patch32"), bundle.get("text_name", "distilbert-base-uncased"))
         model.image_projection.load_state_dict(bundle["image_projection"])
@@ -96,12 +109,67 @@ class FlickrVQA(nn.Module):
         values, indices = probabilities.topk(min(top_k, len(self.answer_labels)))
         return [(self.answer_labels[index], float(value)) for value, index in zip(values.cpu(), indices.cpu())]
 
+    def answer_question(self, image: Image.Image, question: str) -> dict[str, object]:
+        """Route each question to the specialist matching its answer shape."""
+        normalized = question.lower().strip()
+        if self._is_color_question(normalized):
+            return {"kind": "ranked", "answer": self.predict_color(image, question), "source": "object color specialist"}
+        if self._is_binary_question(normalized):
+            answer, confidence = self.predict_binary(image, normalized)
+            return {"kind": "sentence", "answer": answer, "confidence": confidence, "source": "CLIP binary verifier"}
+        if self._is_caption_question(normalized):
+            return {"kind": "sentence", "answer": self.caption(image), "source": "BLIP image captioner"}
+        return {"kind": "ranked", "answer": self.predict(image, question), "source": "cross-attention classifier"}
+
+    @staticmethod
+    def _is_caption_question(question: str) -> bool:
+        return any(phrase in question for phrase in (
+            "what's in", "what is in", "what do you see", "describe", "what is happening",
+            "what happens", "tell me about", "caption", "what is the picture",
+        ))
+
+    @staticmethod
+    def _is_binary_question(question: str) -> bool:
+        return question.startswith(("is ", "are ", "does ", "do ", "has ", "have ", "can "))
+
+    def predict_binary(self, image: Image.Image, question: str) -> tuple[str, float]:
+        words = re.findall(r"[a-z]+", question)
+        target = next((word for word in words if word in OBJECT_WORDS), "person")
+        paired = {"man": "woman", "woman": "man", "boy": "girl", "girl": "boy"}
+        positive = target
+        if target in paired:
+            positive_text = f"a photo of a {target}"
+            negative_text = f"a photo of a {paired[target]}"
+        else:
+            positive_text = f"a photo containing a {target}"
+            negative_text = f"a photo with no {target}"
+        inputs = self.processor(text=[positive_text, negative_text], images=[image], return_tensors="pt", padding=True).to(next(self.head.parameters()).device)
+        with torch.inference_mode():
+            probabilities = self.clip(**inputs).logits_per_image.softmax(dim=-1)[0]
+        confidence = float(probabilities[0])
+        if confidence >= 0.5:
+            return f"Yes, the image appears to show a {positive}.", confidence
+        return f"No, the image does not appear to show a {positive}.", float(1 - confidence)
+
+    def caption(self, image: Image.Image) -> str:
+        """Generate one concise visual description for open-ended questions."""
+        device = next(self.head.parameters()).device
+        if self.captioner is None:
+            self.caption_processor = BlipProcessor.from_pretrained(BLIP_NAME)
+            self.captioner = BlipForConditionalGeneration.from_pretrained(BLIP_NAME).to(device).eval()
+        inputs = self.caption_processor(images=image, return_tensors="pt").to(device)
+        with torch.inference_mode():
+            generated = self.captioner.generate(**inputs, max_new_tokens=32, num_beams=4)
+        text = self.caption_processor.decode(generated[0], skip_special_tokens=True).strip()
+        return text[:1].upper() + text[1:].rstrip(".") + "."
+
     def fusion_summary(self) -> dict[str, str]:
         return {
             "image_encoder": "Frozen CLIP ViT-B/32",
             "question_encoder": "Frozen DistilBERT",
             "fusion": "Image query attends to question key/value",
             "trainable": "Projection layers, cross-attention, and answer head",
+            "answering": "Captioning, binary verification, color, and classification routes",
         }
 
     @staticmethod
