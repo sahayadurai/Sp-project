@@ -20,6 +20,8 @@ The first run downloads the Flickr30k dataset and the CLIP/DistilBERT checkpoint
 
 The dashboard routes questions by answer shape: `What's in this picture?` uses BLIP to produce a one-line description; `Is it a man?` uses CLIP pairwise verification and returns a sentence; color questions use the object-color specialist; other short-label questions use the trained cross-attention classifier. BLIP is used as an image-captioning component, not an all-in-one conversational multimodal LLM.
 
+The main fusion model uses all 50 CLIP vision tokens (the CLS token plus 49 image patches) as queries and all 48 DistilBERT question tokens as keys and values. This is genuine multi-token cross-attention, unlike pooled-vector attention. Train the new architecture with `python train.py --max-images 1000 --epochs 5`; it writes `artifacts/flickr_vqa_patch_attention_1000.pt`.
+
 ## Project layout
 
 - `train.py`: loads Flickr30k, derives QA examples, caches multimodal embeddings, and trains the fusion/head layers.

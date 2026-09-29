@@ -41,7 +41,7 @@ class FlickrVQA(nn.Module):
             parameter.requires_grad = False
         for parameter in self.text_encoder.parameters():
             parameter.requires_grad = False
-        image_size = self.clip.config.projection_dim
+        image_size = self.clip.config.vision_config.hidden_size
         text_size = self.text_encoder.config.hidden_size
         fusion_size = 512
         self.image_projection = nn.Linear(image_size, fusion_size)
@@ -57,33 +57,35 @@ class FlickrVQA(nn.Module):
         )
 
     def encode(self, images: list[Image.Image], questions: list[str]) -> torch.Tensor:
-        image_features, text_features = self.encode_modalities(images, questions)
-        return self.fuse(image_features, text_features)
+        image_features, text_features, text_attention_mask = self.encode_modalities(images, questions)
+        return self.fuse(image_features, text_features, text_attention_mask)
 
-    def encode_modalities(self, images: list[Image.Image], questions: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+    def encode_modalities(self, images: list[Image.Image], questions: list[str]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         device = next(self.head.parameters()).device
         inputs = self.processor(images=images, return_tensors="pt").to(device)
-        image_features = self.clip.get_image_features(**inputs)
-        tokens = self.tokenizer(questions, padding=True, truncation=True, max_length=48, return_tensors="pt").to(device)
-        text_features = self.text_encoder(**tokens).last_hidden_state[:, 0]
+        image_features = self.clip.vision_model(pixel_values=inputs["pixel_values"]).last_hidden_state
+        tokens = self.tokenizer(questions, padding="max_length", truncation=True, max_length=48, return_tensors="pt").to(device)
+        text_features = self.text_encoder(**tokens).last_hidden_state
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-        return image_features, text_features
+        return image_features, text_features, tokens["attention_mask"]
 
-    def fuse(self, image_features: torch.Tensor, text_features: torch.Tensor) -> torch.Tensor:
-        image_token = self.image_projection(image_features).unsqueeze(1)
-        text_token = self.text_projection(text_features).unsqueeze(1)
+    def fuse(self, image_features: torch.Tensor, text_features: torch.Tensor, text_attention_mask: torch.Tensor) -> torch.Tensor:
+        image_tokens = self.image_projection(image_features)
+        text_tokens = self.text_projection(text_features)
         attended_image, attention_weights = self.cross_attention(
-            query=image_token,
-            key=text_token,
-            value=text_token,
+            query=image_tokens,
+            key=text_tokens,
+            value=text_tokens,
+            key_padding_mask=~text_attention_mask.bool(),
             need_weights=True,
+            average_attn_weights=False,
         )
         self.last_attention = attention_weights.detach()
-        return self.fusion_norm((image_token + attended_image).squeeze(1))
+        return self.fusion_norm(image_tokens + attended_image).mean(dim=1)
 
-    def forward_features(self, image_features: torch.Tensor, text_features: torch.Tensor) -> torch.Tensor:
-        return self.head(self.fuse(image_features, text_features))
+    def forward_features(self, image_features: torch.Tensor, text_features: torch.Tensor, text_attention_mask: torch.Tensor) -> torch.Tensor:
+        return self.head(self.fuse(image_features, text_features, text_attention_mask))
 
     def forward(self, images: list[Image.Image], questions: list[str]) -> torch.Tensor:
         return self.head(self.encode(images, questions))
@@ -126,6 +128,8 @@ class FlickrVQA(nn.Module):
         return any(phrase in question for phrase in (
             "what's in", "what is in", "what do you see", "describe", "what is happening",
             "what happens", "tell me about", "caption", "what is the picture",
+            "who is in", "who are in", "who is shown", "who are shown",
+            "what animal", "which animal", "what is the animal", "what kind of animal",
         ))
 
     @staticmethod

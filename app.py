@@ -1,6 +1,7 @@
 """Streamlit dashboard for Flickr30k VQA."""
 
 from pathlib import Path
+from typing import cast
 
 import streamlit as st
 from PIL import Image
@@ -27,7 +28,7 @@ st.markdown('<div class="hero"><h1>VQA System</h1><p>A compact, inspectable visi
 
 with st.sidebar:
     st.header("Model status")
-    checkpoint = st.text_input("Checkpoint", "artifacts/flickr_vqa_1000.pt")
+    checkpoint = st.text_input("Checkpoint", "artifacts/flickr_vqa_patch_attention_1000.pt")
     device = st.selectbox("Runtime", ["cpu", "mps", "cuda"], index=0)
     actual_device = resolve_device(device)
     if actual_device != device:
@@ -67,7 +68,8 @@ with right:
                     st.markdown(f'<div class="answer"><strong>{result["answer"]}</strong><br><small>{result["source"]}{confidence_text}</small></div>', unsafe_allow_html=True)
                 else:
                     st.markdown("#### Ranked answers")
-                    for rank, (answer, confidence) in enumerate(result["answer"], 1):
+                    predictions = cast(list[tuple[str, float]], result["answer"])
+                    for rank, (answer, confidence) in enumerate(predictions, 1):
                         st.markdown(f'<div class="answer"><strong>{rank}. {answer}</strong><br><small>{result["source"]} · confidence {confidence:.1%}</small></div>', unsafe_allow_html=True)
             except Exception as error:
                 st.exception(error)
