@@ -28,12 +28,12 @@ st.markdown('<div class="hero"><h1>VQA System</h1><p>A compact, inspectable visi
 
 with st.sidebar:
     st.header("Model status")
-    checkpoint = st.text_input("Checkpoint", "artifacts/flickr_vqa_patch_attention_1000.pt")
+    checkpoint = st.text_input("Checkpoint", "artifacts/flickr_vqa_patch_attention_10000.pt")
     device = st.selectbox("Runtime", ["cpu", "mps", "cuda"], index=0)
     actual_device = resolve_device(device)
     if actual_device != device:
         st.caption(f"{device} unavailable; using {actual_device}.")
-    st.caption("Train with: python train.py --max-images 1000")
+    st.caption("Trained on 10,000 Flickr30k images · patch-token cross-attention")
 
 @st.cache_resource(show_spinner="Loading vision and language encoders...")
 def load_model(path: str, runtime: str):

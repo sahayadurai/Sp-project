@@ -12,15 +12,15 @@ Flickr30k provides images and natural-language captions, not human-written VQA p
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python train.py --max-images 1000 --epochs 5
+python train.py --max-images 10000 --epochs 5 --batch-size 64 --examples-per-image 8 --device mps --output artifacts/flickr_vqa_patch_attention_10000.pt
 streamlit run app.py
 ```
 
-The first run downloads the Flickr30k dataset and the CLIP/DistilBERT checkpoints from Hugging Face. Training uses 1,000 images by default and learns a compact cross-attention fusion block: the image representation is the query and the question representation supplies key/value context. For a laptop smoke test, use `--max-images 100`; use a free GPU runtime for faster training. Questions containing `color` or `colour` use an object-specific visual specialist with foreground cropping.
+The first run downloads the Flickr30k dataset and the CLIP/DistilBERT checkpoints from Hugging Face. The submitted checkpoint was trained on 10,000 images with Apple MPS. Questions containing `color` or `colour` use an object-specific visual specialist with foreground cropping.
 
 The dashboard routes questions by answer shape: `What's in this picture?` uses BLIP to produce a one-line description; `Is it a man?` uses CLIP pairwise verification and returns a sentence; color questions use the object-color specialist; other short-label questions use the trained cross-attention classifier. BLIP is used as an image-captioning component, not an all-in-one conversational multimodal LLM.
 
-The main fusion model uses all 50 CLIP vision tokens (the CLS token plus 49 image patches) as queries and all 48 DistilBERT question tokens as keys and values. This is genuine multi-token cross-attention, unlike pooled-vector attention. Train the new architecture with `python train.py --max-images 1000 --epochs 5`; it writes `artifacts/flickr_vqa_patch_attention_1000.pt`.
+The main fusion model uses all 50 CLIP vision tokens (the CLS token plus 49 image patches) as queries and all 48 DistilBERT question tokens as keys and values. This is genuine multi-token cross-attention, unlike pooled-vector attention. The 10,000-image training command writes `artifacts/flickr_vqa_patch_attention_10000.pt`.
 
 ## Project layout
 
