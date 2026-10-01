@@ -1,0 +1,12 @@
+services:
+  vqa-system:
+    build: .
+    image: vqa-system:latest
+    ports:
+      - "8503:8502"
+    volumes:
+      - huggingface-cache:/home/vqa/.cache/huggingface
+    restart: unless-stopped
+
+volumes:
+  huggingface-cache:

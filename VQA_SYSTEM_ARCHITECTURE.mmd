@@ -1,0 +1,50 @@
+flowchart TB
+    subgraph TRAIN[Training: Flickr30k caption-derived supervision]
+        DS[Flickr30k images and captions<br/>10,000 images selected] --> GEN[Deterministic QA generation<br/>object, color, count, presence templates]
+        GEN --> FILT[Cap: 8 examples per image<br/>drop answer labels with frequency below 2]
+        FILT --> PAIRS[79,754 QA examples<br/>1,275 answer classes]
+        PAIRS --> CACHE[Encode frozen modalities once<br/>cache image tokens, text tokens, text masks]
+        CACHE --> OPT[Train projections, 8-head attention,<br/>fusion LayerNorm, answer MLP<br/>Cross-entropy + AdamW, 5 epochs]
+        OPT --> CKPT[Checkpoint<br/>flickr_vqa_patch_attention_10000.pt]
+    end
+
+    subgraph CORE[Learned cross-attention classifier]
+        IMG[Uploaded image] --> PREI[CLIP image processor]
+        PREI --> CLIP[Frozen CLIP ViT-B/32 vision transformer]
+        CLIP --> IT[50 visual tokens<br/>CLS + 49 patches<br/>768 dimensions]
+        Q[Question text] --> TOK[DistilBERT tokenizer<br/>max length 48 + attention mask]
+        TOK --> DIST[Frozen DistilBERT encoder]
+        DIST --> TT[48 contextual text tokens<br/>768 dimensions]
+        IT --> IP[Trainable image projection<br/>768 to 512]
+        TT --> TP[Trainable text projection<br/>768 to 512]
+        IP --> ATT[8-head multi-head cross-attention<br/>Q = image tokens<br/>K,V = question tokens<br/>mask padded text tokens]
+        TP --> ATT
+        ATT --> RES[Residual image context<br/>LayerNorm + mean pool]
+        RES --> MLP[Trainable answer MLP]
+        MLP --> RANK[Top-k answer labels<br/>softmax scores]
+        CKPT -. loads learned weights .-> IP
+        CKPT -.-> TP
+        CKPT -.-> ATT
+        CKPT -.-> MLP
+    end
+
+    subgraph ROUTER[Live inference: Streamlit question router]
+        UP[Image upload + question] --> ROUTE{Question type?}
+        ROUTE -->|Open-ended description<br/>who/what is shown| BLIP[BLIP image captioner<br/>one-sentence description]
+        ROUTE -->|Binary question<br/>is / are / does| VERIFY[CLIP positive vs negative<br/>text-image similarity]
+        ROUTE -->|Color question| COLOR[Color specialist<br/>CLIP prompt ranking<br/>ball: lower-center pixel heuristic]
+        ROUTE -->|Other short answer| CORE
+        BLIP --> SENT[Sentence answer]
+        VERIFY --> SENT
+        COLOR --> RANKED[Ranked color answers]
+        RANK --> RANKED
+        SENT --> UI[Streamlit answer display]
+        RANKED --> UI
+    end
+
+    classDef frozen fill:#e7eef8,stroke:#52739e,color:#152b45,stroke-width:1.5px;
+    classDef learned fill:#fce8d5,stroke:#c36a32,color:#38200f,stroke-width:2px;
+    classDef result fill:#e0f2e6,stroke:#44845b,color:#173a23,stroke-width:1.5px;
+    class CLIP,DIST frozen;
+    class IP,TP,ATT,RES,MLP,OPT learned;
+    class CKPT,RANK,SENT,RANKED,UI result;

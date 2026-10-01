@@ -20,6 +20,18 @@ The first run downloads the Flickr30k dataset and the CLIP/DistilBERT checkpoint
 
 The dashboard routes questions by answer shape: `What's in this picture?` uses BLIP to produce a one-line description; `Is it a man?` uses CLIP pairwise verification and returns a sentence; color questions use the object-color specialist; other short-label questions use the trained cross-attention classifier. BLIP is used as an image-captioning component, not an all-in-one conversational multimodal LLM.
 
+## Run with Docker
+
+The included image packages the Streamlit app and the trained 10,000-image checkpoint. Build and launch it from the project root:
+
+```bash
+docker compose up --build
+```
+
+Open <http://localhost:8503>. Stop it with `Ctrl+C`; run `docker compose down` to remove the container. The named `huggingface-cache` volume preserves downloaded CLIP, DistilBERT, and BLIP model files between container runs. The first request requiring BLIP downloads its model weights, so the container needs internet access initially.
+
+The Docker image installs CPU-only PyTorch. Docker Desktop on macOS does not expose Apple MPS/Metal to Linux containers, so native execution with `.venv` is faster on this Mac. On a Linux host with NVIDIA Container Toolkit, adapt the image to a CUDA-enabled PyTorch wheel and configure GPU access; the current Docker setup prioritizes a portable CPU demo.
+
 The main fusion model uses all 50 CLIP vision tokens (the CLS token plus 49 image patches) as queries and all 48 DistilBERT question tokens as keys and values. This is genuine multi-token cross-attention, unlike pooled-vector attention. The 10,000-image training command writes `artifacts/flickr_vqa_patch_attention_10000.pt`.
 
 ## Project layout

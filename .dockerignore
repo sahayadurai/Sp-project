@@ -1,0 +1,9 @@
+.git
+.venv
+__pycache__
+*.py[cod]
+.cache
+data
+artifacts/*.pt
+!artifacts/flickr_vqa_patch_attention_10000.pt
+TECHNICAL_REPORT.pdf
